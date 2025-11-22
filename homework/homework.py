@@ -95,3 +95,228 @@
 # {'type': 'cm_matrix', 'dataset': 'train', 'true_0': {"predicted_0": 15562, "predicte_1": 666}, 'true_1': {"predicted_0": 3333, "predicted_1": 1444}}
 # {'type': 'cm_matrix', 'dataset': 'test', 'true_0': {"predicted_0": 15562, "predicte_1": 650}, 'true_1': {"predicted_0": 2490, "predicted_1": 1420}}
 #
+
+import os
+import json
+import gzip
+import pickle
+import pandas as pd
+from sklearn.feature_selection import SelectKBest, f_classif
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import (
+    balanced_accuracy_score,
+    confusion_matrix,
+    make_scorer,
+    precision_score,
+    recall_score,
+    f1_score
+)
+from sklearn.pipeline import Pipeline
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import MinMaxScaler, OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.model_selection import GridSearchCV
+
+
+
+
+"""
+Paso 1.
+Realice la limpieza de los datasets:
+- Renombre la columna "default payment next month" a "default".
+- Remueva la columna "ID".
+- Elimine los registros con informacion no disponible.
+- Para la columna EDUCATION, valores > 4 indican niveles superiores
+  de educación, agrupe estos valores en la categoría "others".
+
+"""
+
+test_data_pd = pd.read_csv("files/input/test_data.csv.zip", compression='zip')
+train_data_pd = pd.read_csv("files/input/train_data.csv.zip", compression='zip')
+
+test_data_pd.rename(columns={"default payment next month": "default"}, inplace=True)
+train_data_pd.rename(columns={"default payment next month": "default"}, inplace=True)
+
+test_data_pd.drop(columns=["ID"], inplace=True)
+train_data_pd.drop(columns=["ID"], inplace=True)
+
+# Eliminar registros con información no disponible (EDUCATION=0 y MARRIAGE=0)
+test_data_pd = test_data_pd[(test_data_pd['EDUCATION'] != 0) & (test_data_pd['MARRIAGE'] != 0)]
+train_data_pd = train_data_pd[(train_data_pd['EDUCATION'] != 0) & (train_data_pd['MARRIAGE'] != 0)]
+
+test_data_pd = test_data_pd.dropna()
+train_data_pd = train_data_pd.dropna()
+
+train_data_pd['EDUCATION'] = train_data_pd['EDUCATION'].apply(lambda x: x if x <= 4 else 4)
+test_data_pd['EDUCATION'] = test_data_pd['EDUCATION'].apply(lambda x: x if x <= 4 else 4)
+
+
+"""
+Paso 2.
+Divida los datasets en x_train, y_train, x_test, y_test.
+
+
+
+"""
+
+
+x_train = train_data_pd.drop(columns=["default"])
+y_train = train_data_pd["default"]
+
+x_test = test_data_pd.drop(columns=["default"])
+y_test = test_data_pd["default"]
+
+"""
+Paso 3.
+Cree un pipeline para el modelo de clasificación. Este pipeline debe
+contener las siguientes capas:
+- Transforma las variables categoricas usando el método
+  one-hot-encoding.
+- Escala las demas variables al intervalo [0, 1].
+- Selecciona las K mejores caracteristicas.
+- Ajusta un modelo de regresion logistica.
+
+"""
+
+categorical_features = ['SEX', 'EDUCATION', 'MARRIAGE']
+numerical_features = x_train.columns.difference(categorical_features)
+
+
+
+preprocessor = ColumnTransformer(
+    transformers=[
+        ('cat', OneHotEncoder(), categorical_features),
+    ],
+    remainder=MinMaxScaler()
+)
+
+
+pipeline = Pipeline(
+    steps=[
+        ('preprocessor', preprocessor),
+        ('selector', SelectKBest(score_func=f_classif)),
+        ('classifier', LogisticRegression(random_state=42, max_iter=2000))
+    ]
+)
+
+"""
+Paso 4.
+Optimice los hiperparametros del pipeline usando validación cruzada.
+Use 10 splits para la validación cruzada. Use la función de precision
+balanceada para medir la precisión del modelo.
+
+"""
+
+param_grid = {
+    "selector__k": range(1, len(x_train.columns) + 1),
+    "classifier__C": [0.1, 1, 10],
+    "classifier__solver": ['liblinear', 'lbfgs'],
+
+}   
+
+grid_search = GridSearchCV(
+    pipeline,
+    param_grid,
+    scoring="balanced_accuracy",
+    cv=10,
+    n_jobs=-1,
+    verbose=1,
+)
+
+grid_search.fit(x_train, y_train)
+
+"""
+Paso 5.
+Guarde el modelo (comprimido con gzip) como "files/models/model.pkl.gz".
+Recuerde que es posible guardar el modelo comprimido usanzo la libreria gzip.
+
+"""
+
+os.makedirs("files/models", exist_ok=True)
+
+with gzip.open(os.path.join("files", "models", "model.pkl.gz"), "wb") as f:
+    pickle.dump(grid_search, f)
+
+"""
+Paso 6.
+Calcule las metricas de precision, precision balanceada, recall,
+y f1-score para los conjuntos de entrenamiento y prueba.
+Guardelas en el archivo files/output/metrics.json. Cada fila
+del archivo es un diccionario con las metricas de un modelo.
+Este diccionario tiene un campo para indicar si es el conjunto
+de entrenamiento o prueba. Por ejemplo:
+
+{'type': 'metrics', 'dataset': 'train', 'precision': 0.8, 'balanced_accuracy': 0.7, 'recall': 0.9, 'f1_score': 0.85}
+{'type': 'metrics', 'dataset': 'test', 'precision': 0.7, 'balanced_accuracy': 0.6, 'recall': 0.8, 'f1_score': 0.75}
+
+"""
+
+y_pred_train = grid_search.predict(x_train)
+y_pred_test = grid_search.predict(x_test)
+
+train_metrics = {
+    "type": "metrics",
+    'dataset': 'train',
+    'precision': float(precision_score(y_train, y_pred_train, zero_division=0)),
+    'balanced_accuracy': float(balanced_accuracy_score(y_train, y_pred_train)),
+    'recall': float(recall_score(y_train, y_pred_train, zero_division=0)),
+    'f1_score': float(f1_score(y_train, y_pred_train, zero_division=0))
+}
+
+test_metrics = {
+    "type": "metrics",
+    'dataset': 'test',
+    'precision': float(precision_score(y_test, y_pred_test, zero_division=0)),
+    'balanced_accuracy': float(balanced_accuracy_score(y_test, y_pred_test)),
+    'recall': float(recall_score(y_test, y_pred_test, zero_division=0)),
+    'f1_score': float(f1_score(y_test, y_pred_test, zero_division=0))
+}
+
+
+"""
+Paso 7.
+Calcule las matrices de confusion para los conjuntos de entrenamiento y
+prueba. Guardelas en el archivo files/output/metrics.json. Cada fila
+del archivo es un diccionario con las metricas de un modelo.
+de entrenamiento o prueba. Por ejemplo:
+
+{'type': 'cm_matrix', 'dataset': 'train', 'true_0': {"predicted_0": 15562, "predicte_1": 666}, 'true_1': {"predicted_0": 3333, "predicted_1": 1444}}
+{'type': 'cm_matrix', 'dataset': 'test', 'true_0': {"predicted_0": 15562, "predicte_1": 650}, 'true_1': {"predicted_0": 2490, "predicted_1": 1420}}
+
+"""
+
+cm_train = confusion_matrix(y_train, y_pred_train)
+cm_test = confusion_matrix(y_test, y_pred_test)
+
+train_cm = {
+    "type": "cm_matrix",
+    'dataset': 'train',
+    'true_0': {
+        "predicted_0": int(cm_train[0, 0]),
+        "predicted_1": int(cm_train[0, 1])
+    },
+    'true_1': {
+        "predicted_0": int(cm_train[1, 0]),
+        "predicted_1": int(cm_train[1, 1])
+    }
+}
+
+test_cm = {
+    "type": "cm_matrix",
+    'dataset': 'test',
+    'true_0': {
+        "predicted_0": int(cm_test[0, 0]),
+        "predicted_1": int(cm_test[0, 1])
+    },
+    'true_1': {
+        "predicted_0": int(cm_test[1, 0]),
+        "predicted_1": int(cm_test[1, 1])
+    }
+}
+
+os.makedirs("files/output", exist_ok=True)
+with open("files/output/metrics.json", "w", encoding="utf-8") as f:
+    f.write(json.dumps(train_metrics) + "\n")
+    f.write(json.dumps(test_metrics) + "\n")
+    f.write(json.dumps(train_cm) + "\n")
+    f.write(json.dumps(test_cm) + "\n")
