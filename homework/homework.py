@@ -140,7 +140,6 @@ train_data_pd.rename(columns={"default payment next month": "default"}, inplace=
 test_data_pd.drop(columns=["ID"], inplace=True)
 train_data_pd.drop(columns=["ID"], inplace=True)
 
-# Eliminar registros con información no disponible (EDUCATION=0 y MARRIAGE=0)
 test_data_pd = test_data_pd[(test_data_pd['EDUCATION'] != 0) & (test_data_pd['MARRIAGE'] != 0)]
 train_data_pd = train_data_pd[(train_data_pd['EDUCATION'] != 0) & (train_data_pd['MARRIAGE'] != 0)]
 
@@ -211,8 +210,7 @@ param_grid = {
     "selector__k": range(1, len(x_train.columns) + 1),
     "classifier__C": [0.1, 1, 10],
     "classifier__solver": ['liblinear', 'lbfgs'],
-
-}   
+}
 
 grid_search = GridSearchCV(
     pipeline,
